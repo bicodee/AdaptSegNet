@@ -12,11 +12,10 @@ import torch.nn.functional as F
 import sys
 import os
 import os.path as osp
+import matplotlib.pyplot as plt
 import random
-from tensorboardX import SummaryWriter
-# DeeplabMulti is a generator
+
 from model.deeplab_multi import DeeplabMulti
-# FCDiscriminator is a discrininator
 from model.discriminator import FCDiscriminator
 from utils.loss import CrossEntropy2d
 from dataset.gta5_dataset import GTA5DataSet
@@ -29,11 +28,11 @@ BATCH_SIZE = 1
 ITER_SIZE = 1
 NUM_WORKERS = 4
 DATA_DIRECTORY = './data/GTA5'
-DATA_LIST_PATH = './dataset/gta5_list/train.txt'
+DATA_LIST_PATH = '../dataset/gta5_list/train.txt'
 IGNORE_LABEL = 255
 INPUT_SIZE = '1280,720'
 DATA_DIRECTORY_TARGET = './data/Cityscapes/data'
-DATA_LIST_PATH_TARGET = './dataset/cityscapes_list/train.txt'
+DATA_LIST_PATH_TARGET = '../dataset/cityscapes_list/train.txt'
 INPUT_SIZE_TARGET = '1024,512'
 LEARNING_RATE = 2.5e-4
 MOMENTUM = 0.9
@@ -47,7 +46,6 @@ SAVE_NUM_IMAGES = 2
 SAVE_PRED_EVERY = 5000
 SNAPSHOT_DIR = './snapshots/'
 WEIGHT_DECAY = 0.0005
-LOG_DIR = './log'
 
 LEARNING_RATE_D = 1e-4
 LAMBDA_SEG = 0.1
@@ -130,10 +128,8 @@ def get_arguments():
                         help="Where to save snapshots of the model.")
     parser.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY,
                         help="Regularisation parameter for L2-loss.")
-    parser.add_argument("--cpu", action='store_true', help="choose to use cpu device.")
-    parser.add_argument("--tensorboard", action='store_true', help="choose whether to use tensorboard.")
-    parser.add_argument("--log-dir", type=str, default=LOG_DIR,
-                        help="Path to the directory of log.")
+    parser.add_argument("--gpu", type=int, default=0,
+                        help="choose gpu device.")
     parser.add_argument("--set", type=str, default=SET,
                         help="choose adaptation set.")
     parser.add_argument("--gan", type=str, default=GAN,
@@ -142,6 +138,18 @@ def get_arguments():
 
 
 args = get_arguments()
+
+
+def loss_calc(pred, label, gpu):
+    """
+    This function returns cross entropy loss for semantic segmentation
+    """
+    # out shape batch_size x channels x h x w -> batch_size x channels x h x w
+    # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
+    label = Variable(label.long()).cuda(gpu)
+    criterion = CrossEntropy2d().cuda(gpu)
+
+    return criterion(pred, label)
 
 
 def lr_poly(base_lr, iter, max_iter, power):
@@ -165,8 +173,6 @@ def adjust_learning_rate_D(optimizer, i_iter):
 def main():
     """Create the model and start the training."""
 
-    device = torch.device("cuda" if not args.cpu else "cpu")
-
     w, h = map(int, args.input_size.split(','))
     input_size = (w, h)
 
@@ -174,6 +180,7 @@ def main():
     input_size_target = (w, h)
 
     cudnn.enabled = True
+    gpu = args.gpu
 
     # Create network
     if args.model == 'DeepLab':
@@ -194,19 +201,19 @@ def main():
         model.load_state_dict(new_params)
 
     model.train()
-    model.to(device)
+    model.cuda(args.gpu)
 
     cudnn.benchmark = True
 
     # init D
-    model_D1 = FCDiscriminator(num_classes=args.num_classes).to(device)
-    model_D2 = FCDiscriminator(num_classes=args.num_classes).to(device)
+    model_D1 = FCDiscriminator(num_classes=args.num_classes)
+    model_D2 = FCDiscriminator(num_classes=args.num_classes)
 
     model_D1.train()
-    model_D1.to(device)
+    model_D1.cuda(args.gpu)
 
     model_D2.train()
-    model_D2.to(device)
+    model_D2.cuda(args.gpu)
 
     if not os.path.exists(args.snapshot_dir):
         os.makedirs(args.snapshot_dir)
@@ -246,21 +253,13 @@ def main():
         bce_loss = torch.nn.BCEWithLogitsLoss()
     elif args.gan == 'LS':
         bce_loss = torch.nn.MSELoss()
-    seg_loss = torch.nn.CrossEntropyLoss(ignore_index=255)
 
-    interp = nn.Upsample(size=(input_size[1], input_size[0]), mode='bilinear', align_corners=True)
-    interp_target = nn.Upsample(size=(input_size_target[1], input_size_target[0]), mode='bilinear', align_corners=True)
+    interp = nn.Upsample(size=(input_size[1], input_size[0]), mode='bilinear')
+    interp_target = nn.Upsample(size=(input_size_target[1], input_size_target[0]), mode='bilinear')
 
     # labels for adversarial training
     source_label = 0
     target_label = 1
-
-    # set up tensor board
-    if args.tensorboard:
-        if not os.path.exists(args.log_dir):
-            os.makedirs(args.log_dir)
-
-        writer = SummaryWriter(args.log_dir)
 
     for i_iter in range(args.num_steps):
 
@@ -293,31 +292,29 @@ def main():
 
             # train with source
 
-            _, batch = trainloader_iter.__next__()
-
+            _, batch = trainloader_iter.next()
             images, labels, _, _ = batch
-            images = images.to(device)
-            labels = labels.long().to(device)
+            images = Variable(images).cuda(args.gpu)
 
             pred1, pred2 = model(images)
             pred1 = interp(pred1)
             pred2 = interp(pred2)
 
-            loss_seg1 = seg_loss(pred1, labels)
-            loss_seg2 = seg_loss(pred2, labels)
+            loss_seg1 = loss_calc(pred1, labels, args.gpu)
+            loss_seg2 = loss_calc(pred2, labels, args.gpu)
             loss = loss_seg2 + args.lambda_seg * loss_seg1
 
             # proper normalization
             loss = loss / args.iter_size
             loss.backward()
-            loss_seg_value1 += loss_seg1.item() / args.iter_size
-            loss_seg_value2 += loss_seg2.item() / args.iter_size
+            loss_seg_value1 += loss_seg1.data.cpu().numpy()[0] / args.iter_size
+            loss_seg_value2 += loss_seg2.data.cpu().numpy()[0] / args.iter_size
 
             # train with target
 
-            _, batch = targetloader_iter.__next__()
+            _, batch = targetloader_iter.next()
             images, _, _ = batch
-            images = images.to(device)
+            images = Variable(images).cuda(args.gpu)
 
             pred_target1, pred_target2 = model(images)
             pred_target1 = interp_target(pred_target1)
@@ -326,15 +323,19 @@ def main():
             D_out1 = model_D1(F.softmax(pred_target1))
             D_out2 = model_D2(F.softmax(pred_target2))
 
-            loss_adv_target1 = bce_loss(D_out1, torch.FloatTensor(D_out1.data.size()).fill_(source_label).to(device))
+            loss_adv_target1 = bce_loss(D_out1,
+                                       Variable(torch.FloatTensor(D_out1.data.size()).fill_(source_label)).cuda(
+                                           args.gpu))
 
-            loss_adv_target2 = bce_loss(D_out2, torch.FloatTensor(D_out2.data.size()).fill_(source_label).to(device))
+            loss_adv_target2 = bce_loss(D_out2,
+                                        Variable(torch.FloatTensor(D_out2.data.size()).fill_(source_label)).cuda(
+                                            args.gpu))
 
             loss = args.lambda_adv_target1 * loss_adv_target1 + args.lambda_adv_target2 * loss_adv_target2
             loss = loss / args.iter_size
             loss.backward()
-            loss_adv_target_value1 += loss_adv_target1.item() / args.iter_size
-            loss_adv_target_value2 += loss_adv_target2.item() / args.iter_size
+            loss_adv_target_value1 += loss_adv_target1.data.cpu().numpy()[0] / args.iter_size
+            loss_adv_target_value2 += loss_adv_target2.data.cpu().numpy()[0] / args.iter_size
 
             # train D
 
@@ -352,9 +353,11 @@ def main():
             D_out1 = model_D1(F.softmax(pred1))
             D_out2 = model_D2(F.softmax(pred2))
 
-            loss_D1 = bce_loss(D_out1, torch.FloatTensor(D_out1.data.size()).fill_(source_label).to(device))
+            loss_D1 = bce_loss(D_out1,
+                              Variable(torch.FloatTensor(D_out1.data.size()).fill_(source_label)).cuda(args.gpu))
 
-            loss_D2 = bce_loss(D_out2, torch.FloatTensor(D_out2.data.size()).fill_(source_label).to(device))
+            loss_D2 = bce_loss(D_out2,
+                               Variable(torch.FloatTensor(D_out2.data.size()).fill_(source_label)).cuda(args.gpu))
 
             loss_D1 = loss_D1 / args.iter_size / 2
             loss_D2 = loss_D2 / args.iter_size / 2
@@ -362,8 +365,8 @@ def main():
             loss_D1.backward()
             loss_D2.backward()
 
-            loss_D_value1 += loss_D1.item()
-            loss_D_value2 += loss_D2.item()
+            loss_D_value1 += loss_D1.data.cpu().numpy()[0]
+            loss_D_value2 += loss_D2.data.cpu().numpy()[0]
 
             # train with target
             pred_target1 = pred_target1.detach()
@@ -372,9 +375,11 @@ def main():
             D_out1 = model_D1(F.softmax(pred_target1))
             D_out2 = model_D2(F.softmax(pred_target2))
 
-            loss_D1 = bce_loss(D_out1, torch.FloatTensor(D_out1.data.size()).fill_(target_label).to(device))
+            loss_D1 = bce_loss(D_out1,
+                              Variable(torch.FloatTensor(D_out1.data.size()).fill_(target_label)).cuda(args.gpu))
 
-            loss_D2 = bce_loss(D_out2, torch.FloatTensor(D_out2.data.size()).fill_(target_label).to(device))
+            loss_D2 = bce_loss(D_out2,
+                               Variable(torch.FloatTensor(D_out2.data.size()).fill_(target_label)).cuda(args.gpu))
 
             loss_D1 = loss_D1 / args.iter_size / 2
             loss_D2 = loss_D2 / args.iter_size / 2
@@ -382,26 +387,12 @@ def main():
             loss_D1.backward()
             loss_D2.backward()
 
-            loss_D_value1 += loss_D1.item()
-            loss_D_value2 += loss_D2.item()
+            loss_D_value1 += loss_D1.data.cpu().numpy()[0]
+            loss_D_value2 += loss_D2.data.cpu().numpy()[0]
 
         optimizer.step()
         optimizer_D1.step()
         optimizer_D2.step()
-
-        if args.tensorboard:
-            scalar_info = {
-                'loss_seg1': loss_seg_value1,
-                'loss_seg2': loss_seg_value2,
-                'loss_adv_target1': loss_adv_target_value1,
-                'loss_adv_target2': loss_adv_target_value2,
-                'loss_D1': loss_D_value1,
-                'loss_D2': loss_D_value2,
-            }
-
-            if i_iter % 10 == 0:
-                for key, val in scalar_info.items():
-                    writer.add_scalar(key, val, i_iter)
 
         print('exp = {}'.format(args.snapshot_dir))
         print(
@@ -409,20 +400,17 @@ def main():
             i_iter, args.num_steps, loss_seg_value1, loss_seg_value2, loss_adv_target_value1, loss_adv_target_value2, loss_D_value1, loss_D_value2))
 
         if i_iter >= args.num_steps_stop - 1:
-            print('save model ...')
+            print 'save model ...'
             torch.save(model.state_dict(), osp.join(args.snapshot_dir, 'GTA5_' + str(args.num_steps_stop) + '.pth'))
             torch.save(model_D1.state_dict(), osp.join(args.snapshot_dir, 'GTA5_' + str(args.num_steps_stop) + '_D1.pth'))
             torch.save(model_D2.state_dict(), osp.join(args.snapshot_dir, 'GTA5_' + str(args.num_steps_stop) + '_D2.pth'))
             break
 
         if i_iter % args.save_pred_every == 0 and i_iter != 0:
-            print('taking snapshot ...')
+            print 'taking snapshot ...'
             torch.save(model.state_dict(), osp.join(args.snapshot_dir, 'GTA5_' + str(i_iter) + '.pth'))
             torch.save(model_D1.state_dict(), osp.join(args.snapshot_dir, 'GTA5_' + str(i_iter) + '_D1.pth'))
             torch.save(model_D2.state_dict(), osp.join(args.snapshot_dir, 'GTA5_' + str(i_iter) + '_D2.pth'))
-
-    if args.tensorboard:
-        writer.close()
 
 
 if __name__ == '__main__':

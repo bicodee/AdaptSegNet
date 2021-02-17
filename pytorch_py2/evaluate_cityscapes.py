@@ -3,6 +3,7 @@ import scipy
 from scipy import ndimage
 import numpy as np
 import sys
+from packaging import version
 
 import torch
 from torch.autograd import Variable
@@ -17,11 +18,12 @@ from collections import OrderedDict
 import os
 from PIL import Image
 
+import matplotlib.pyplot as plt
 import torch.nn as nn
 IMG_MEAN = np.array((104.00698793,116.66876762,122.67891434), dtype=np.float32)
 
 DATA_DIRECTORY = './data/Cityscapes/data'
-DATA_LIST_PATH = './dataset/cityscapes_list/val.txt'
+DATA_LIST_PATH = '../dataset/cityscapes_list/val.txt'
 SAVE_PATH = './result/cityscapes'
 
 IGNORE_LABEL = 255
@@ -68,11 +70,12 @@ def get_arguments():
                         help="Number of classes to predict (including background).")
     parser.add_argument("--restore-from", type=str, default=RESTORE_FROM,
                         help="Where restore model parameters from.")
+    parser.add_argument("--gpu", type=int, default=0,
+                        help="choose gpu device.")
     parser.add_argument("--set", type=str, default=SET,
                         help="choose evaluation set.")
     parser.add_argument("--save", type=str, default=SAVE_PATH,
                         help="Path to save result.")
-    parser.add_argument("--cpu", action='store_true', help="choose to use cpu device.")
     return parser.parse_args()
 
 
@@ -80,6 +83,8 @@ def main():
     """Create the model and start the evaluation process."""
 
     args = get_arguments()
+
+    gpu0 = args.gpu
 
     if not os.path.exists(args.save):
         os.makedirs(args.save)
@@ -106,27 +111,27 @@ def main():
     ###
     model.load_state_dict(saved_state_dict)
 
-    device = torch.device("cuda" if not args.cpu else "cpu")
-    model = model.to(device)
-
     model.eval()
+    model.cuda(gpu0)
 
     testloader = data.DataLoader(cityscapesDataSet(args.data_dir, args.data_list, crop_size=(1024, 512), mean=IMG_MEAN, scale=False, mirror=False, set=args.set),
                                     batch_size=1, shuffle=False, pin_memory=True)
 
-    interp = nn.Upsample(size=(1024, 2048), mode='bilinear', align_corners=True)
+
+    if version.parse(torch.__version__) >= version.parse('0.4.0'):
+        interp = nn.Upsample(size=(1024, 2048), mode='bilinear', align_corners=True)
+    else:
+        interp = nn.Upsample(size=(1024, 2048), mode='bilinear')
 
     for index, batch in enumerate(testloader):
         if index % 100 == 0:
-            print('%d processd' % index)
+            print '%d processd' % index
         image, _, name = batch
-        image = image.to(device)
-
         if args.model == 'DeeplabMulti':
-            output1, output2 = model(image)
+            output1, output2 = model(Variable(image, volatile=True).cuda(gpu0))
             output = interp(output2).cpu().data[0].numpy()
         elif args.model == 'DeeplabVGG' or args.model == 'Oracle':
-            output = model(image)
+            output = model(Variable(image, volatile=True).cuda(gpu0))
             output = interp(output).cpu().data[0].numpy()
 
         output = output.transpose(1,2,0)
