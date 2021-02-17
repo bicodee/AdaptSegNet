@@ -14,8 +14,9 @@ import os
 import os.path as osp
 import random
 from tensorboardX import SummaryWriter
-
+# DeeplabMulti is a generator
 from model.deeplab_multi import DeeplabMulti
+# FCDiscriminator is a discrininator
 from model.discriminator import FCDiscriminator
 from utils.loss import CrossEntropy2d
 from dataset.gta5_dataset import GTA5DataSet
@@ -27,12 +28,12 @@ MODEL = 'DeepLab'
 BATCH_SIZE = 1
 ITER_SIZE = 1
 NUM_WORKERS = 4
-DATA_DIRECTORY = './data/GTA5'
-DATA_LIST_PATH = './dataset/gta5_list/train.txt'
+DATA_DIRECTORY = '../data/GTA5'
+DATA_LIST_PATH = '../dataset/gta5_list/train.txt'
 IGNORE_LABEL = 255
 INPUT_SIZE = '1280,720'
-DATA_DIRECTORY_TARGET = './data/Cityscapes/data'
-DATA_LIST_PATH_TARGET = './dataset/cityscapes_list/train.txt'
+DATA_DIRECTORY_TARGET = '../data/Cityscapes/data'
+DATA_LIST_PATH_TARGET = '../dataset/cityscapes_list/train.txt'
 INPUT_SIZE_TARGET = '1024,512'
 LEARNING_RATE = 2.5e-4
 MOMENTUM = 0.9
@@ -44,9 +45,9 @@ RANDOM_SEED = 1234
 RESTORE_FROM = 'http://vllab.ucmerced.edu/ytsai/CVPR18/DeepLab_resnet_pretrained_init-f81d91e8.pth'
 SAVE_NUM_IMAGES = 2
 SAVE_PRED_EVERY = 5000
-SNAPSHOT_DIR = './snapshots/'
+SNAPSHOT_DIR = '../snapshots/'
 WEIGHT_DECAY = 0.0005
-LOG_DIR = './log'
+LOG_DIR = '../log'
 
 LEARNING_RATE_D = 1e-4
 LAMBDA_SEG = 0.1

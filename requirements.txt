@@ -1,0 +1,9 @@
+matplotlib>=3.2.2
+tensorboardX==2.1
+scipy==1.6.0
+torch==1.7.1+cpu
+torchvision==0.8.2+cpu
+torchaudio==0.7.2
+numpy==1.19.5
+pillow==8.1.0
+mmcv==1.2.6
